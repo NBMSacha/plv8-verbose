@@ -118,7 +118,7 @@ distclean: clean
 .PHONY: subclean all clean installcheck
 
 print-pgxs:
-    @echo $(PGXS)
+	@echo $(PGXS)
 
 include $(PGXS)
 CC=$(CXX)
