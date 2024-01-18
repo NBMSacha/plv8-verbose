@@ -119,7 +119,7 @@ distclean: clean
 
 print-pgxs:
 	@cat $(PGXS)
-	@echo $(PG_CONFIG
+	@echo $(PG_CONFIG)
 
 include $(PGXS)
 CC=$(CXX)
