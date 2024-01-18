@@ -1,4 +1,3 @@
-
 PLV8_VERSION = 3.2.1
 
 CP := cp
@@ -46,3 +45,80 @@ plv8_config.h plv8.so: v8
 deps/v8-cmake/build/libv8_libbase.a:
 	@git submodule update --init --recursive
 	@cd deps/v8-cmake && mkdir -p build && cd build && cmake -Denable-fPIC=ON -DCMAKE_BUILD_TYPE=Release ../ && make -j $(NUMPROC)
+
+v8: deps/v8-cmake/build/libv8_libbase.a
+
+# enable direct jsonb conversion by default
+CCFLAGS += -DJSONB_DIRECT_CONVERSION
+
+CCFLAGS += -Ideps/v8-cmake/v8/include -std=c++17
+
+ifdef EXECUTION_TIMEOUT
+	CCFLAGS += -DEXECUTION_TIMEOUT
+endif
+
+ifdef BIGINT_GRACEFUL
+	CCFLAGS += -DBIGINT_GRACEFUL
+endif
+
+DATA = $(PLV8_DATA)
+DATA_built = plv8.sql
+REGRESS = init-extension plv8 plv8-errors scalar_args inline json startup_pre startup varparam json_conv \
+		  jsonb_conv window guc es6 arraybuffer composites currentresource startup_perms bytea find_function_perms \
+		  memory_limits reset show array_spread regression procedure
+
+ifndef BIGINT_GRACEFUL
+	REGRESS += bigint
+else
+	REGRESS += bigint_graceful
+endif
+
+SHLIB_LINK += -lv8_base_without_compiler -lv8_compiler -lv8_snapshot -lv8_inspector -lv8_libplatform -lv8_base_without_compiler -lv8_libsampler -lv8_torque_generated -lv8_libbase
+
+OPTFLAGS = -std=c++17 -fno-rtti -O2
+CCFLAGS += -Wall $(OPTFLAGS)
+
+generate_upgrades:
+	@mkdir -p upgrade
+	@./generate_upgrade.sh $(PLV8_VERSION)
+	$(eval PLV8_DATA +=  $(wildcard upgrade/*.sql))
+
+all: generate_upgrades
+
+plv8_config.h: plv8_config.h.in Makefile
+	sed -e 's/^#undef PLV8_VERSION/#define PLV8_VERSION "$(PLV8_VERSION)"/' $< > $@
+
+%.o : %.cc plv8_config.h plv8.h
+	$(CXX) $(CCFLAGS) $(CPPFLAGS) -fPIC -c -o $@ $<
+
+COMPILE.cxx.bc = $(CLANG) -xc++ -Wno-ignored-attributes $(BITCODE_CXXFLAGS) $(CCFLAGS) $(CPPFLAGS) -emit-llvm -c
+
+%.bc : %.cc
+	$(COMPILE.cxx.bc) $(CCFLAGS) $(CPPFLAGS) -fPIC -c -o $@ $<
+	$(LLVM_BINPATH)/opt -module-summary -f $@ -o $@
+
+DATA_built =
+
+all: $(DATA)
+
+%--$(PLV8_VERSION).sql: plv8.sql.common
+	sed -e 's/@LANG_NAME@/$*/g' $< | sed -e 's/@PLV8_VERSION@/$(PLV8_VERSION)/g' | $(CC) -E -P $(CPPFLAGS) -DLANG_$* - > $@
+
+%.control: plv8.control.common
+	sed -e 's/@PLV8_VERSION@/$(PLV8_VERSION)/g' $< | $(CXX) -E -P -DLANG_$* - > $@
+
+subclean:
+	rm -f plv8_config.h $(DATA)
+
+clean: subclean
+
+distclean: clean
+	@cd deps/v8-cmake/build && make clean
+
+.PHONY: subclean all clean installcheck
+
+print-pgxs:
+    @echo $(PGXS)
+
+include $(PGXS)
+CC=$(CXX)
